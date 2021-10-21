@@ -1,9 +1,17 @@
-import { AwsProvider, EksCluster, DataAwsEksClusterAuth, IamRole, IamPolicyAttachment, DataAwsAvailabilityZones as AZ, DataAwsSubnetIds } from '@cdktf/provider-aws';
+import {
+  AwsProvider,
+  EKS as eks,
+  IAM as iam,
+  VPC as ec2vpc,
+  DataSources,
+} from '@cdktf/provider-aws';
 import * as k8s from '@cdktf/provider-kubernetes';
 import { TerraformOutput, Token, ITerraformDependable } from 'cdktf';
 import { Construct } from 'constructs';
 import { NodeGroup, NodeGroupOptions, CapacityType, ScalingConfig } from '.';
 import * as awsVpc from './imports/modules/terraform-aws-modules/vpc/aws';
+
+const AZ = DataSources.DataAwsAvailabilityZones;
 
 /**
  * Properties for the Cluster
@@ -111,7 +119,7 @@ export class Cluster extends Construct {
   readonly publicSubnets: string[];
   readonly privateSubnets: string[];
   readonly clusterName: string;
-  readonly cluster: EksCluster;
+  readonly eksCluster: eks.EksCluster;
   readonly vpc?: any;
   readonly vpcId?: string;
   readonly defaultNodeGroup?: NodeGroup;
@@ -137,19 +145,18 @@ export class Cluster extends Construct {
 
     // create the cluster
     this.clusterName = props.clusterName ?? `${id}cluster`;
-    const cluster = new EksCluster(this, 'EksCluster', {
+    const cluster = new eks.EksCluster(this, 'EksCluster', {
       name: this.clusterName,
       version: props.version.version,
-      vpcConfig: [
+      vpcConfig:
         {
           // the cluster should associate with all available subnets
           subnetIds: this.vpcId ? this.getAllSubnetsFromVpcId(this.vpcId, [this.vpc]).ids :
             this.privateSubnets.concat(this.publicSubnets),
         },
-      ],
       roleArn: this._createClusterRole().arn,
     });
-    this.cluster = cluster;
+    this.eksCluster = cluster;
     // cluster should be created after vpc
     if (this.vpc) {
       cluster.node.addDependency(this.vpc);
@@ -161,10 +168,10 @@ export class Cluster extends Construct {
       scalingConfig: props.scalingConfig,
       capacityType: props.capacityType,
       instanceTypes: props.instanceTypes,
-      dependsOn: [this.cluster],
+      dependsOn: [this.eksCluster],
     });
 
-    const clusterAuthData = new DataAwsEksClusterAuth(this, 'DataAwsEksClusterAuth', {
+    const clusterAuthData = new eks.DataAwsEksClusterAuth(this, 'DataAwsEksClusterAuth', {
       name: this.clusterName,
     });
 
@@ -196,8 +203,8 @@ export class Cluster extends Construct {
     return vpc;
   }
 
-  private _createClusterRole(): IamRole {
-    const role = new IamRole(this, 'ClusterRole', {
+  private _createClusterRole(): iam.IamRole {
+    const role = new iam.IamRole(this, 'ClusterRole', {
       assumeRolePolicy: JSON.stringify({
         Version: '2012-10-17',
         Statement: [
@@ -212,20 +219,20 @@ export class Cluster extends Construct {
         ],
       }),
     });
-    new IamPolicyAttachment(this, 'AmazonEKSClusterPolicyAttachment', {
+    new iam.IamPolicyAttachment(this, 'AmazonEKSClusterPolicyAttachment', {
       name: 'AmazonEKSClusterPolicyAttachment',
       policyArn: 'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy',
-      roles: [role.name],
+      roles: [role.name!],
     });
-    new IamPolicyAttachment(this, 'AmazonEKSVPCResourceControllerAttachment', {
+    new iam.IamPolicyAttachment(this, 'AmazonEKSVPCResourceControllerAttachment', {
       name: 'AmazonEKSVPCResourceControllerAttachment',
       policyArn: 'arn:aws:iam::aws:policy/AmazonEKSVPCResourceController',
-      roles: [role.name],
+      roles: [role.name!],
     });
     return role;
   }
   private getAllSubnetsFromVpcId(vpcId: string, dependable?: ITerraformDependable[]) {
-    return new DataAwsSubnetIds(this, `${vpcId}subnets`, {
+    return new ec2vpc.DataAwsSubnetIds(this, `${vpcId}subnets`, {
       vpcId,
       dependsOn: dependable,
     });
@@ -236,7 +243,7 @@ export class Cluster extends Construct {
       clusterName: this.clusterName,
       nodeRole: options.nodeRole ?? this.defaultNodeGroup?.nodeGroupRoleArn,
       subnets: options.subnets ?? this.privateSubnets,
-      dependsOn: [this.cluster],
+      dependsOn: [this.eksCluster],
     });
   }
 }
